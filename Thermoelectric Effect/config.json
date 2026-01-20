@@ -1,0 +1,9 @@
+{
+  "t_ref_celsius": 0.0,
+  "peltier_calc_temp_celsius": 25.0,
+  "thermocouple_type": "K (Chromel-Alumel)",
+  "input_units": {
+    "temperature": "C",
+    "voltage": "mV"
+  }
+}

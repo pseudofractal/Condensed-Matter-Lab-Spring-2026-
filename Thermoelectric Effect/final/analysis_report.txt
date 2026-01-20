@@ -1,0 +1,11 @@
+Thermoelectric Effect Final Report
+========================================
+Thermocouple Type:   K (Chromel-Alumel)
+Seebeck Coeff (α):   (4.0930+/-0.0156)e-05 V/K
+Systematic Offset (c): (-1.6479+/-1.5951)e-05 V
+Peltier Coeff (π):    (1.2203+/-0.0046)e-02 V (at 298.1 K)
+R^2:                 0.999552
+Adjusted R^2:        0.999537
+p-value (slope m):   1.796102e-53
+p-value (intercept): 3.095539e-01
+----------------------------------------
