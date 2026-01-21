@@ -5,32 +5,30 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.constants as sc
+from matplotlib.ticker import ScalarFormatter
 from scipy.optimize import curve_fit
 from uncertainties import ufloat
 
 plt.rcParams.update(
   {
-    "text.usetex": False,
     "font.family": "serif",
     "mathtext.fontset": "cm",
     "axes.grid": True,
-    "grid.alpha": 0.2,
+    "grid.alpha": 0.3,
     "grid.linestyle": "--",
-    "figure.dpi": 300,
-    "axes.titlesize": 12,
+    "figure.dpi": 200,
     "axes.labelsize": 11,
-    "legend.fontsize": 9,
   }
 )
 
 
 def get_paths():
+  """Generates and creates the necessary directory structure for the project."""
   base_path = Path(__file__).parent
   paths = {
     "data": base_path / "data",
     "plots": base_path / "plots",
     "final": base_path / "final",
-    "sample": base_path / "sample_data",
     "config": base_path / "config.json",
   }
   for name, path in paths.items():
@@ -39,194 +37,159 @@ def get_paths():
   return paths
 
 
-def setup_experiment(paths):
-  if not paths["config"].exists():
-    config = {
-      "chi_water_mass_SI": -9.0e-9,
-      "g_m_s2": sc.g,
-      "mu_0_SI": sc.mu_0,
-      "experiments": [
-        {"file_name": "experiment_1.csv", "density_g_mL": 1.15, "h0_cm": 10.0},
-        {"file_name": "experiment_2.csv", "density_g_mL": 1.20, "h0_cm": 10.0},
-      ],
-    }
-    with open(paths["config"], "w") as f:
-      json.dump(config, f, indent=2)
-
-  calib_path = paths["sample"] / "calibration.csv"
-  if not calib_path.exists():
-    cal_data = pd.DataFrame(
-      {
-        "current_A": [],
-        "field_G": [],
-      }
-    )
-    cal_data.to_csv(calib_path, index=False)
-
-  exp_path = paths["sample"] / "experiment_1.csv"
-  if not exp_path.exists():
-    exp_data = pd.DataFrame(
-      {
-        "current_A": [],
-        "h_observed_cm": [],
-        "B0_Gauss": [],
-      }
-    )
-    exp_data.to_csv(exp_path, index=False)
-
-
 def linear_func(x, m, c):
+  """Standard linear model for curve fitting."""
   return m * x + c
 
 
+def get_fit_metrics(x, y, popt, pcov):
+  """Calculates R-squared and Relative Slope Uncertainty as measures of fit correctness."""
+  residuals = y - linear_func(x, *popt)
+  ss_res = np.sum(residuals**2)
+  ss_tot = np.sum((y - np.mean(y)) ** 2)
+  r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+
+  slope_error = np.sqrt(pcov[0, 0])
+  rel_error_pct = (slope_error / abs(popt[0])) * 100
+
+  return r_squared, rel_error_pct
+
+
 def fit_calibration(paths):
+  """Fits the electromagnet current vs magnetic field data."""
   file_path = paths["data"] / "calibration.csv"
   if not file_path.exists():
-    print(f"Error: Calibration file not found at {file_path}")
-    print("Please copy calibration.csv from sample_data/ to data/ and fill it.")
     return None
 
   df = pd.read_csv(file_path)
-  field_T = df["field_Gauss"].to_numpy() * 1e-4
-  popt, pcov = curve_fit(linear_func, df["current_A"], field_T)
-  perr = np.sqrt(np.diag(pcov))
+  x, y = df["current_A"].to_numpy(), df["field_Gauss"].to_numpy() * 1e-4
 
-  m_u = ufloat(popt[0], perr[0])
-  c_u = ufloat(popt[1], perr[1])
+  popt, pcov = curve_fit(linear_func, x, y)
+  r2, _ = get_fit_metrics(x, y, popt, pcov)
 
-  fig, ax = plt.subplots()
-  ax.scatter(df["current_A"], df["field_Gauss"].to_numpy() * 1e-4, color="black", marker="o", label="Data")
-  x_range = np.linspace(df["current_A"].min(), df["current_A"].max(), 100)
-  ax.plot(
-    x_range, linear_func(x_range, *popt), "k--", label=f"Fit: $B = {popt[0]:.3f}I + {popt[1]:.3f}$"
-  )
-  ax.set_xlabel(r"Current $I$ [A]")
-  ax.set_ylabel(r"Magnetic Field $B$ [T]")
-  ax.legend()
-  plt.savefig(paths["plots"] / "calibration_curve.png")
-  plt.close()
-
-  return m_u, c_u
+  return ufloat(popt[0], np.sqrt(pcov[0, 0])), ufloat(popt[1], np.sqrt(pcov[1, 1])), r2
 
 
 def analyze_susceptibility(paths, config, m_cal, c_cal):
+  """Performs susceptibility calculations and fit quality assessment for each dataset."""
   results = []
-  mu0 = config["mu_0_SI"]
-  g = config["g_m_s2"]
+  mu0, g = config["mu_0_SI"], config["g_m_s2"]
   chi_w_mass = config["chi_water_mass_SI"]
 
   for entry in config["experiments"]:
-    filename = entry["file_name"]
-    rho_lab = entry["density_g_mL"]
-    rho_si = rho_lab * 1000.0
-    h0_m = entry["h0_cm"] * 0.01
-
-    file_path = paths["data"] / filename
+    file_path = paths["data"] / entry["file_name"]
     if not file_path.exists():
-      print(
-        f"Warning: Experiment file '{filename}' listed in config was not found in data/ folder. Skipping."
-      )
       continue
 
     df = pd.read_csv(file_path)
-    b_fields = np.array([m_cal * i + c_cal for i in df["current_A"]])
-    b_vals = np.array([val.n for val in b_fields])
+    density_lab = entry["density_g_mL"]
+    rho_si = density_lab * 1000.0
+    h0_m = entry["h0_cm"] * 0.01
 
+    b_vals = np.array([(m_cal * i + c_cal).n for i in df["current_A"]])
     b0_t = df["B0_Gauss"].to_numpy() * 1e-4
-    h_obs_m = df["h_observed_cm"].to_numpy() * 0.01
-    h_diff_m = np.abs(h_obs_m - h0_m)
-
     x_data = b_vals**2 - b0_t**2
-    popt, pcov = curve_fit(linear_func, x_data, h_diff_m)
-    slope_u = ufloat(popt[0], np.sqrt(pcov[0, 0]))
+    y_data_m = np.abs(df["h_observed_cm"].to_numpy() * 0.01 - h0_m)
 
-    chi_vol = slope_u * (4 * mu0 * rho_si * g)
-    chi_mass_total = chi_vol / rho_si
-    chi_mass_mn = chi_mass_total - chi_w_mass
+    popt, pcov = curve_fit(linear_func, x_data, y_data_m)
+    r2, rel_err = get_fit_metrics(x_data, y_data_m, popt, pcov)
+
+    slope_u = ufloat(popt[0], np.sqrt(pcov[0, 0]))
+    chi_vol = slope_u * (2 * mu0 * rho_si * g)
+    chi_mass = (chi_vol / rho_si) - chi_w_mass
 
     results.append(
       {
-        "file": filename,
-        "rho_lab": rho_lab,
-        "rho_si": rho_si,
+        "file": entry["file_name"],
+        "density": density_lab,
         "chi_vol": chi_vol,
-        "chi_mass_mn": chi_mass_mn,
-        "fit_params": popt,
-        "x_data": x_data,
-        "y_data": h_diff_m,
+        "chi_mass": chi_mass,
+        "r2": r2,
+        "rel_err": rel_err,
+        "x": x_data,
+        "y_mm": y_data_m * 1000,
+        "fit_line_mm": linear_func(x_data, popt[0] * 1000, popt[1] * 1000),
       }
     )
-
   return results
 
 
-def plot_individual_results(paths, results):
-  for res in results:
-    fig, ax = plt.subplots()
-    x, y = res["x_data"], res["y_data"]
-    popt = res["fit_params"]
+def plot_quincke(paths, res):
+  """Generates plots titled by density in mm units with scientific notation for field terms."""
+  fig, ax = plt.subplots(figsize=(6, 4.5))
 
-    ax.scatter(x, y, color="black", marker="s", label="Measured Points")
-    x_fit = np.linspace(min(x), max(x), 100)
-    ax.plot(x_fit, linear_func(x_fit, *popt), "k-", linewidth=1, label="Linear Fit")
+  ax.scatter(res["x"], res["y_mm"], color="black", marker="o", s=20, label="Observed")
+  ax.plot(
+    res["x"], res["fit_line_mm"], color="red", linestyle="-", linewidth=1.5, label="Linear Fit"
+  )
 
-    ax.set_title(f"Quincke Analysis: {res['file']}\n(Density: {res['rho_lab']} g/mL)")
-    ax.set_xlabel(r"$(B^2 - B_0^2)$ [$\text{T}^2$]")
-    ax.set_ylabel(r"Displacement $h$ [m]")
+  ax.set_ylabel(r"Displacement $\Delta h$ [mm]")
+  ax.set_xlabel(r"Magnetic Field Term $(B^2 - B_0^2)$ [T$^2$]")
 
-    stats_text = (
-      f"$\\chi_{{vol}} = {res['chi_vol'].n:.3e} \\pm {res['chi_vol'].s:.3e}$\n"
-      rf"$\chi_{{mass}} = {res['chi_mass_mn'].n:.3e} \pm {res['chi_mass_mn'].s:.3e}$ m$^3$/kg"
-    )
-    ax.text(
-      0.05,
-      0.95,
-      stats_text,
-      transform=ax.transAxes,
-      verticalalignment="top",
-      bbox=dict(boxstyle="round", facecolor="white", alpha=0.5),
-    )
+  ax.xaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+  ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
 
-    ax.legend(loc="lower right")
-    plt.tight_layout()
-    clean_name = Path(res["file"]).stem
-    plt.savefig(paths["plots"] / f"fit_{clean_name}.png")
-    plt.close()
+  info_text = f"$R^2 = {res['r2']:.4f}$\nFit Uncertainty: {res['rel_err']:.2f}%"
+  ax.text(
+    0.05,
+    0.95,
+    info_text,
+    transform=ax.transAxes,
+    verticalalignment="top",
+    bbox=dict(boxstyle="round", facecolor="white", alpha=0.8, edgecolor="silver"),
+  )
+
+  ax.set_title(f"Density: {res['density']} g/mL")
+  ax.legend(loc="lower right")
+
+  plt.tight_layout()
+  plt.savefig(paths["plots"] / f"plot_{Path(res['file']).stem}.png")
+  plt.close()
 
 
 def main():
+  """Main execution flow for directory setup, calibration, analysis, and reporting."""
   paths = get_paths()
-  setup_experiment(paths)
+  if not paths["config"].exists():
+    with open(paths["config"], "w") as f:
+      json.dump(
+        {
+          "chi_water_mass_SI": -9.0e-9,
+          "g_m_s2": sc.g,
+          "mu_0_SI": sc.mu_0,
+          "experiments": [{"file_name": "experiment_1.csv", "density_g_mL": 1.15, "h0_cm": 10.0}],
+        },
+        f,
+        indent=2,
+      )
 
   with open(paths["config"]) as f:
     config = json.load(f)
 
-  cal_params = fit_calibration(paths)
-  if cal_params is None:
-    print("Calibration phase failed. Aborting analysis.")
+  cal = fit_calibration(paths)
+  if not cal:
+    print("Required file data/calibration.csv missing.")
     return
+  m_cal, c_cal, cal_r2 = cal
 
-  m_cal, c_cal = cal_params
   results = analyze_susceptibility(paths, config, m_cal, c_cal)
 
-  if not results:
-    print("Error: No experimental data files were successfully processed.")
-    print("Check if filenames in config.json match the files in the data/ folder.")
-    return
+  with (paths["final"] / "report.txt").open("w") as f:
+    f.write("QUINKE'S METHOD: EXPERIMENTAL CORRECTNESS REPORT\n")
+    f.write("=" * 50 + "\n")
+    f.write(f"Magnet Calibration Linearity (R^2): {cal_r2:.5f}\n\n")
 
-  plot_individual_results(paths, results)
-  with (paths["final"] / "report.txt").open("w", encoding="utf-8") as f:
-    f.write("Quincke's Method: Paramagnetic Susceptibility Report\n" + "=" * 60 + "\n")
     for r in results:
+      plot_quincke(paths, r)
       f.write(f"Dataset: {r['file']}\n")
-      f.write(f"  Input Density: {r['rho_lab']:.4f} g/mL\n")
-      f.write(f"  SI Density:    {r['rho_si']:.2f} kg/m^3\n")
-      f.write(f"  Volume Susc:   {r['chi_vol']:.4e}\n")
-      f.write(f"  Mass Susc Mn:  {r['chi_mass_mn']:.4e} m^3/kg\n")
-      f.write("-" * 60 + "\n")
+      f.write(f"  Density: {r['density']} g/mL\n")
+      f.write(f"  Volume Susceptibility: {r['chi_vol']:.4e}\n")
+      f.write(f"  Mass Susceptibility:   {r['chi_mass']:.4e} m^3/kg\n")
+      f.write(f"  Fit Correctness (R^2): {r['r2']:.5f}\n")
+      f.write(f"  Relative Uncertainty:  {r['rel_err']:.2f}%\n")
+      f.write("-" * 50 + "\n")
 
-  print(f"Successfully processed {len(results)} datasets.")
-  print("Check plots/ for individual graphs and final/report.txt for numerical results.")
+  print(f"Analysis Complete. Reports generated in {paths['final']}.")
 
 
 if __name__ == "__main__":
