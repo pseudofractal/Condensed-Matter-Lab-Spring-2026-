@@ -1,4 +1,6 @@
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -139,6 +141,64 @@ def analyze_thermoelectric(paths: dict[str, Path], config: dict):
   }
 
 
+def generate_latex_table(paths: dict[str, Path], res: dict):
+  output_dir = paths["final"]
+  tex_file = output_dir / "detailed_data_table.tex"
+  df = pd.DataFrame(
+    {
+      "T": res["t0_celsius"] + res["delta_t"],
+      "T0": res["t0_celsius"],
+      "DT": res["delta_t"],
+      "EMF": res["emf_v"] * 1000,
+    }
+  )
+
+  n = len(df)
+  half = (n + 1) // 2
+  df1 = df.iloc[:half].reset_index(drop=True)
+  df2 = df.iloc[half:].reset_index(drop=True)
+
+  latex_code = [
+    r"\documentclass{standalone}",
+    r"\usepackage{booktabs}",
+    r"\usepackage{siunitx}",
+    r"\sisetup{round-mode=figures, round-precision=4, table-format=3.3}",
+    r"\begin{document}",
+    r"\begin{tabular}{SSSS @{\hspace{1cm}} SSSS}",
+    r"\toprule",
+    r"{$T$ (\unit{\celsius})} & {$T_0$ (\unit{\celsius})} & {$\Delta T$ (\unit{\kelvin})} & {$E$ (mV)} & "
+    r"{$T$ (\unit{\celsius})} & {$T_0$ (\unit{\celsius})} & {$\Delta T$ (\unit{\kelvin})} & {$E$ (mV)} \\",
+    r"\midrule",
+  ]
+
+  for i in range(half):
+    r1 = df1.iloc[i]
+    left_cols = f"{r1['T']:.2f} & {r1['T0']:.2f} & {r1['DT']:.2f} & {r1['EMF']:.3f}"
+
+    if i < len(df2):
+      r2 = df2.iloc[i]
+      right_cols = f"{r2['T']:.2f} & {r2['T0']:.2f} & {r2['DT']:.2f} & {r2['EMF']:.3f}"
+    else:
+      right_cols = r"{} & {} & {} & {}"
+
+    latex_code.append(f"{left_cols} & {right_cols} \\\\")
+
+  latex_code.extend([r"\bottomrule", r"\end{tabular}", r"\end{document}"])
+
+  with open(tex_file, "w", encoding="utf-8") as f:
+    f.write("\n".join(latex_code))
+
+  if shutil.which("pdflatex"):
+    subprocess.run(
+      ["pdflatex", "-interaction=nonstopmode", tex_file.name],
+      cwd=output_dir,
+      stdout=subprocess.DEVNULL,
+    )
+    for ext in [".aux", ".log"]:
+      (output_dir / tex_file.stem).with_suffix(ext).unlink(missing_ok=True)
+    print(f"Detailed PDF table generated: {output_dir / 'detailed_data_table.pdf'}")
+
+
 def plot_seebeck_effect(paths: dict[str, Path], res: dict):
   """Plots data and fit with directional axis labels and statistical summary."""
   fig, ax = plt.subplots(figsize=(8, 5))
@@ -198,6 +258,7 @@ def main():
 
   if results:
     plot_seebeck_effect(paths, results)
+    generate_latex_table(paths, results)
 
     with (paths["final"] / "analysis_report.txt").open("w", encoding="utf-8") as f:
       f.write("Thermoelectric Effect Final Report\n" + "=" * 40 + "\n")
