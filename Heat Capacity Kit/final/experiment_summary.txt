@@ -5,15 +5,21 @@ Water Equivalent (W): 2.5696e+01 +/- 8.2915e-01 J/K
 Material: Copper
   Applied Current: 0.28 A
   Measured Cv:     9.4283e+02 +/- 2.1484e+02 J/(kg·K)
+  Literature Cv:   385.0 J/(kg·K)
+  Relative Error:  144.89%
   Fit Quality R2:  0.00000
 
 Material: Aluminum
   Applied Current: 0.29 A
   Measured Cv:     1.7106e+03 +/- 1.2448e+03 J/(kg·K)
+  Literature Cv:   900.0 J/(kg·K)
+  Relative Error:  90.06%
   Fit Quality R2:  0.00000
 
 Material: Brass
   Applied Current: 0.28 A
   Measured Cv:     8.1255e+02 +/- 2.5344e+02 J/(kg·K)
+  Literature Cv:   380.0 J/(kg·K)
+  Relative Error:  113.83%
   Fit Quality R2:  0.00000
 

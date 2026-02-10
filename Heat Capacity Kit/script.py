@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +218,111 @@ def plot_silver_residuals(df: pd.DataFrame, output_path: Path):
   plt.close()
 
 
+def generate_latex_output(
+  paths: dict[str, Path], summary: list[dict], all_data: dict[str, pd.DataFrame]
+):
+  """Generates LaTeX tables for results and raw data, converted to images."""
+  # 1. Results Table
+  res_tex = paths["final"] / "results_table.tex"
+  res_content = [
+    r"\documentclass[varwidth,border=10pt]{standalone}",
+    r"\usepackage{booktabs, array, amsmath}",
+    r"\begin{document}",
+    r"\centering \small \textbf{Calorimetry Results Summary}\\[1ex]",
+    r"\begin{tabular}{lccc}",
+    r"\toprule",
+    r"Material & Mass [g] & Current [A] & $C_v$ [J/kg$\cdot$K] \\",
+    r"\midrule",
+  ]
+
+  for item in summary:
+    res_content.append(
+      f"{item['Material']} & {item['Mass'] * 1e3:.1f} & {item['Current']:.3f} & "
+      f"{item['Cv'].n:.1f} $\pm$ {item['Cv'].s:.1f} \\\\"
+    )
+
+  res_content.extend([r"\bottomrule", r"\end{tabular}", r"\end{document}"])
+
+  with open(res_tex, "w") as f:
+    f.write("\n".join(res_content))
+
+  # 2. Raw Data Table (Side-by-side)
+  data_tex = paths["final"] / "data_table.tex"
+
+  # Align materials: Ag, Cu, Al, Brass
+  order = ["Silver", "Copper", "Aluminum", "Brass"]
+  cols = []
+  for mat in order:
+    if mat in all_data:
+      cols.append(all_data[mat])
+
+  max_rows = max(len(df) for df in cols) if cols else 0
+
+  data_content = [
+    r"\documentclass[varwidth,border=15pt]{standalone}",
+    r"\usepackage{booktabs, array}",
+    r"\begin{document}",
+    r"\centering \footnotesize \textbf{Experimental Heating Intervals}\\[1ex]",
+    r"\begin{tabular}{" + "cc|" * (len(cols) - 1) + "cc}",
+    r"\toprule",
+  ]
+
+  header1 = (
+    " & ".join([rf"\multicolumn{{2}}{{c}}{{{mat}}}" for mat in order if mat in all_data]) + r" \\"
+  )
+  header2 = (
+    " & ".join([r"$T$ [$^\circ$C] & $\Delta t$ [s]" for mat in order if mat in all_data]) + r" \\"
+  )
+
+  data_content.extend([header1, header2, r"\midrule"])
+
+  for i in range(max_rows):
+    row_parts = []
+    for df in cols:
+      if i < len(df):
+        row_parts.append(f"{df.iloc[i]['Temp_C']:.1f} & {df.iloc[i]['dt_s']:.2f}")
+      else:
+        row_parts.append("&")
+    data_content.append(" & ".join(row_parts) + r" \\")
+
+  data_content.extend([r"\bottomrule", r"\end{tabular}", r"\end{document}"])
+
+  with open(data_tex, "w") as f:
+    f.write("\n".join(data_content))
+
+  # Compilation
+  for tex_file, out_name in [(res_tex, "results_summary.png"), (data_tex, "data_table.png")]:
+    try:
+      subprocess.run(
+        [
+          "pdflatex",
+          "-interaction=nonstopmode",
+          "-output-directory",
+          str(paths["final"]),
+          str(tex_file),
+        ],
+        check=True,
+        capture_output=True,
+      )
+      subprocess.run(
+        [
+          "magick",
+          "-density",
+          "300",
+          str(tex_file.with_suffix(".pdf")),
+          str(paths["final"] / out_name),
+        ],
+        check=True,
+      )
+      # Cleanup
+      for ext in [".aux", ".log", ".pdf", ".tex"]:
+        p = tex_file.with_suffix(ext)
+        if p.exists():
+          os.remove(p)
+    except Exception as e:
+      print(f"Latex/Magick error for {tex_file.name}: {e}")
+
+
 def main():
   paths = get_paths()
   setup_experiment(paths)
@@ -235,6 +342,7 @@ def main():
 
   df_cal = pd.read_csv(cal_file)
   res_cal = perform_interval_analysis(df_cal, temp_min=25.5, temp_max=27.5)
+  all_data = {"Silver": df_cal}
 
   # Physics: m_slope = mean_dt / 0.5
   effective_slope_cal = res_cal["mean_dt"] / 0.5
@@ -267,6 +375,7 @@ def main():
 
     found_phase2 = True
     df_mat = pd.read_csv(mat_file)
+    all_data[mat_name] = df_mat
     res_mat = perform_interval_analysis(df_mat, temp_min=25.5, temp_max=27.5)
 
     # Physics: Cv = (m_slope * I^2 * R - W) / m_sample
@@ -289,6 +398,7 @@ def main():
       {
         "Material": mat_name,
         "Current": sample["current_A"],
+        "Mass": sample["mass_kg"],
         "Cv": cv_val,
         "R2": 0.0,
       }  # R2 not relevant for mean
@@ -300,14 +410,21 @@ def main():
 
   # Generate Final Report
   report_path = paths["final"] / "experiment_summary.txt"
+  generate_latex_output(paths, summary_results, all_data)
+
   with open(report_path, "w", encoding="utf-8") as f:
     f.write("Calorimetry Analysis Report\n" + "=" * 40 + "\n")
     f.write(f"Water Equivalent (W): {water_equivalent.n:.4e} +/- {water_equivalent.s:.4e} J/K\n")
     f.write("-" * 40 + "\n")
     for item in summary_results:
+      lit = LIT_VALUES.get(item["Material"], 0)
+      exp_val = item["Cv"].n
+      error = ((exp_val - lit) / lit) * 100 if lit != 0 else 0
       f.write(f"Material: {item['Material']}\n")
       f.write(f"  Applied Current: {item['Current']:.2f} A\n")
       f.write(f"  Measured Cv:     {item['Cv'].n:.4e} +/- {item['Cv'].s:.4e} J/(kg·K)\n")
+      f.write(f"  Literature Cv:   {lit} J/(kg·K)\n")
+      f.write(f"  Relative Error:  {error:.2f}%\n")
       f.write(f"  Fit Quality R2:  {item['R2']:.5f}\n\n")
 
   print(f"Analysis complete for {len(summary_results)} materials. Results in {report_path}")
