@@ -1,0 +1,14 @@
+{
+  "system_resistance_ohm": 10.0,
+  "calibration": {
+    "material": "Silver",
+    "current_A": 0.284,
+    "mass_kg": 0.0079,
+    "cv_j_kgk": 235.0
+  },
+  "samples": [
+    {"material": "Copper", "current_A": 0.284, "mass_kg": 0.0069},
+    {"material": "Aluminum", "current_A": 0.291, "mass_kg": 0.0020},
+    {"material": "Brass", "current_A": 0.284, "mass_kg": 0.0067}
+  ]
+}
