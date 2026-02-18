@@ -1,1 +1,4 @@
 __pycache__/
+curie_temperature/plots/
+curie_temperature/results/
+curie_temperature/tables/
